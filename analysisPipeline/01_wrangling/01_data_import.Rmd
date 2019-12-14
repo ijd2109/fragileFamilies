@@ -10,54 +10,45 @@ require(tidyverse)
 require(haven)
 ```
 
-## read raw SPSS data
+# Load in the data
 ```{r}
-## ARCHIVED CHUNK (SKIP)
-# age 3:
-#D_wave3 = read_sav("../../data/raw/wave3/FF_wave3_2019.sav")
-# age 9:
-#D_wave5 = read_sav("../../data/raw/wave5/FF_wave5_2019.sav")
-# age 15:
-#D_wave6 = read_sav("../../data/raw/wave6/FF_wave6_2019.sav")
-
-# save each as an .rds (faster for reading in next time)
-
-# saveRDS(D_wave3,"../../data/raw/wave3/year3_Data.rds")
-# saveRDS(D_wave5,"../../data/raw/wave5/year9_Data.rds")
-# saveRDS(D_wave6,"../../data/raw/wave6/year15_Data.rds")
+## The hashed out file path (ending in '.sav') indicates the name of the file as downloaded from the data source. The RDS files read-in below are direct conversions from them to .rds files.
+D_wave3 = readRDS("../../data/raw/wave3/year3_Data.rds") # FF_wave3_2019.sav
+D_wave5 = readRDS("../../data/raw/wave5/year9_Data.rds") # FF_wave5_2019.sav
+D_wave6 = readRDS("../../data/raw/wave6/year15_Data.rds") # FF_wave6_2019.sav
 ```
 
-```{r}
-D_wave3 = readRDS("../../data/raw/wave3/year3_Data.rds")
-D_wave5 = readRDS("../../data/raw/wave5/year9_Data.rds")
-D_wave6 = readRDS("../../data/raw/wave6/year15_Data.rds")
-```
-
-# Extract Age 3 'attachment style' categorical variable
+# Extract the attachment style grouping variable from the age 3 file.
 ```{r}
 # store a dataframe containing the id number (for merging) and the variable of choice
 attCat_df = D_wave3 %>%
   select(idnum, ch3att_codeabc)
+```
 
-# descriptives:
+## Raw descriptives with source coding scheme:
+```{r}
 table(attCat_df$ch3att_codeabc)
-#   -9    1    2    3 
-# 2630   47 1719  502 
+```
 
-#dummy code the variable according to the variable documentation
+## Creating dummy codes for 'avoidant', 'resistant', & 'secure' according to the source documentation/coding scheme.
+```{r}
 attCat_df.1 = attCat_df %>%
-  # first the three dummy codes:
+  # 'ch3att_codeabc' is the source variable that contains attachment style.
+  # first the three numeric dummy codes:
   mutate(avoidant = ifelse(ch3att_codeabc == 1, 1, 0),
          secure = ifelse(ch3att_codeabc == 2, 1, 0),
          resistant = ifelse(ch3att_codeabc == 3, 1, 0)) %>%
-  # now replace the numeric codes with a single column of labels (for grouping purposes)
+  # now replace the numeric codes with a single column of factor labels (for grouping purposes)
   rowwise() %>%
-  mutate(ch3att_codeabc = ifelse(all(c(avoidant, secure, resistant)==0), NA,
-           c("avoidant", "secure", "resistant")[which(c(avoidant, secure, resistant)==1)])
+  mutate(
+    ch3att_codeabc = 
+      ifelse(all(c(avoidant, secure, resistant)==0), NA, 
+             c("avoidant", "secure", "resistant")[which(c(avoidant, secure, resistant)==1)])
   ) %>% ungroup() %>% # ungroup by each row
   # now convert `ch3att_codeabc` to a factor
   mutate_at(vars(ch3att_codeabc), ~factor(., levels = c("avoidant", "secure", "resistant")))
-rm(list= c("D_wave3","attCat_df"))
+rm(list= c("D_wave3","attCat_df")) # delete the old versions of the data.
+head(attCat_df.1)
 ```
 
 # Extract the social anxiety and isolation variables from the other two waves
@@ -146,7 +137,7 @@ lapply(yr15_df[2:5], table) # just the connectdedness at school variables.
 #table(yr15_df$yr15_CNCT_Sum, useNA = "ifany")
 ```
 
-# remove if any kids were homeschooled at wave 15 (indicated by '-7').
+# remove if any kids were homeschooled at wave 15 (indicated by '7').
 ### This is because they necessarily cannot report the Outcome variables (connectedness at sch.)
 ```{r}
 # first some filtering based on the responses above
@@ -161,7 +152,7 @@ yr15_df = yr15_df[yr15_df$idnum %in% keepID, ]
 ```
 
 # coding connectedness at age 15
-### REVERSE IT SO HIGHER SCORE IS MORE CONNECTED
+### REVERSE IT SO HIGHER SCORE INDICATES MORE CONNECTED AT SCH.
 ```{r}
 # As indicated above:
 ## coding: 1 = strong agree ... 4 = strong disagree
