@@ -2,7 +2,14 @@
 title: "02_analysis"
 author: "Ian Douglas"
 date: "12/12/2019"
-output: html_document
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    df_print: paged
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
 ---
 ### Analysis Plan
 1. Compute correlations between the outcome, age 15 connectedness at school (CS15), and the predictors: internalizing behaviors (IB) and age 9 (CS9).
@@ -25,7 +32,7 @@ require(car)
 ### Read in data
 ```{r}
 # convert from Tibble to data.frame
-df = as.data.frame(readRDS("../../data/processed/modelData.rds"))
+df = as.data.frame(readRDS("../../data/processed/modelData.rds")) # output of wrangling script
 rownames(df) <- df$idnum
 ```
 
@@ -43,12 +50,9 @@ cor.test(df$internalizingSum, df$yr9_CNCT_Sum, use = "complete.obs")
 # Standardized mean differences and variance ratios.
 ## Pairwise comparison between the three group individually on the outcome (CS15)
 ```{r}
-secure_avoidant = df %>%
-  filter(resistant == 0)
-resistant_secure = df %>%
-  filter(avoidant == 0)
-resist_avoid = df %>%
-  filter(secure == 0)
+secure_avoidant = df %>% filter(resistant == 0)
+resistant_secure = df %>% filter(avoidant == 0)
+resist_avoid = df %>% filter(secure == 0)
 contrast_list = list(secure_avoidant, resistant_secure, resist_avoid)
 effsize::cohen.d(d = contrast_list[[1]]$target, as.factor(contrast_list[[1]]$secure),
                  na.rm = TRUE)
@@ -88,7 +92,7 @@ var(na.omit((filter(df, avoidant == 1))$internalizingSum))/var(na.omit((filter(d
 Results indicate a degree of imbalance that is concerning, according to Rubin's (2001) guidelines, for CS measured at age 9 and 15 (but not the covariate IB). The scenario suggests that the group with a much smaller sample size, those of avoidant attachment styles, has the much higher variance in the domain of school connectedness at ages 9 and 15 than the other two groups. Thus, conducting traditional ANOVA is more likely to increase the risk of comitting Type I error. Instead, to test the significance of the grouping factor on CS15, I will use Welch's test.
 
 ## Visualization
-```{r}
+```{r,eval=FALSE}
 # A density plot wil visualize the means and variances for each group as well:
 #pdf(file="../../plots/groupDensities.pdf", width = 12, height = 8)
 densityPlot(df$target, g = df$ch3att_codeabc, 
@@ -98,8 +102,13 @@ abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="avoidant"))$target), lwd 
 abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="secure"))$target),lty=2,col=4,lwd =2)
 abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="resistant"))$target),lty=3,col=6,lwd =2)
 #dev.off()
+```
+```{r, out.width="0.3\\linewidth", include=TRUE, fig.align="center", fig.cap=c("your caption"), echo=FALSE}
+knitr::include_graphics("../../plots/groupDensities.pdf")
+```
 
 ## And with two groups
+```{r, eval=FALSE}
 density_Data = df %>% mutate_at(vars(avoidant), ~as.factor(ifelse(.==1,"avoidant","other")))
 #pdf(file="../../plots/binTWO_groupDensities.pdf", width = 12, height = 8)
 densityPlot(density_Data$target, g = density_Data$avoidant,
@@ -108,6 +117,9 @@ densityPlot(density_Data$target, g = density_Data$avoidant,
 abline(v = mean(na.rm=TRUE,(density_Data%>%filter(avoidant=="avoidant"))$target), lwd =2)
 abline(v=mean(na.rm=TRUE,(density_Data%>%filter(avoidant=="other"))$target),lty=2,col=4,lwd =2)
 #dev.off()
+```
+```{r, out.width="0.3\\linewidth", include=TRUE, fig.align="center", fig.cap=c("your caption"), echo=FALSE}
+knitr::include_graphics("../../plots/binTWO_groupDensities.pdf")
 ```
 
 # Welch's one-way ANOVA corection for heteroskedasticity.
@@ -135,7 +147,8 @@ Conclusion: the groups alone do not explain a significant proportion in the vari
 
 # Plot the hypothesized interaction.
 ## At low and high levels of internalizing, plot group means for target
-```{r}
+```{r, eval=FALSE}
+# reformat data for plotting purposes.
 plt_data = df %>%
   filter(!is.na(internalizingSum)) %>%
   group_by(ch3att_codeabc) %>%
@@ -146,18 +159,31 @@ plt_data = df %>%
                list(~mean(., na.rm = TRUE), ~sd(., na.rm = TRUE))) %>%
   ungroup() %>%
   rename_at(vars(ch3att_codeabc), ~("Group"))
+
+# generate plot:
 plt <- ggplot(plt_data, aes(x = internalizing, y = target_mean, group = Group)) +
   geom_point(aes(color = Group)) +
   geom_line(aes(color = Group)) +
   ggtitle(label = "Mean Connectedness at School by Group and Level of Internalizing Behavior")
-# ggsave(plt, device = "pdf", file="../../plots/interaction_plot.pdf",
-#        width = 12, height = 8)
+
+# display plot:
+plt
+```
+```{r, eval=FALSE,echo=FALSE}
+ggsave(plt, device = "pdf", file="../../plots/interaction_plot.pdf",
+       width = 12, height = 8)
+```
+```{r, eval=FALSE,echo=FALSE}
+save(plt, file = "../../plots/layers/plt_ggplotlayers_pdfinteraction_plot.RData")
+```
+```{r,eval=TRUE,echo=FALSE}
+load("../../plots/layers/plt_ggplotlayers_pdfinteraction_plot.RData")
 plt
 ```
 
-
-# binning to pit avoidant against all other groups, as per theory
-```{r}
+## Binning into avoidant and non-avoidant groups, as per theorized interaction
+```{r, eval=FALSE}
+# format data for plotting purposes
 plt_data2 = df %>% 
   mutate_at("avoidant", ~as.factor(ifelse(. == 1, "True", "False"))) %>%
   filter(!is.na(internalizingSum)) %>%
@@ -167,12 +193,25 @@ plt_data2 = df %>%
   summarize_at(vars(internalizingSum, target), 
                list(~mean(., na.rm = TRUE), ~sd(., na.rm = TRUE))) %>%
   ungroup()
+
+# generate plot:
 plt2 <- ggplot(plt_data2, aes(x = internalizing, y = target_mean, group = avoidant)) +
   geom_point(aes(color = avoidant)) +
   geom_line(aes(color = avoidant)) +
   ggtitle(label = "Mean Connectedness at School by Group and Level of Internalizing Behavior")
-# ggsave(plt, device = "pdf", file="../../plots/2group_int_plot.pdf",
-#        width = 12, height = 8)
+
+# display plot:
+plt2
+```
+```{r, eval=FALSE,echo=FALSE}
+ggsave(plt2, device = "pdf", file="../../plots/2group_int_plot.pdf",
+       width = 12, height = 8)
+```
+```{r, eval=FALSE,echo=FALSE}
+save(plt2, file = "../../plots/layers/plt2_ggplotlayers_2group_int_plot.RData")
+```
+```{r,eval=TRUE,echo=FALSE}
+load("../../plots/layers/plt2_ggplotlayers_2group_int_plot.RData")
 plt2
 ```
 
@@ -181,9 +220,19 @@ This crossing type interaction is a possible explanation for the undeteceted mea
 # Regression Analyses
 ## Fit the model
 ```{r}
+# note, the interaction is drawn between internalization and the dummy code for avoidant
+# Thus, implicitly, there are two groups in this model.
+
 model = lm(target ~ yr9_CNCT_Sum + # year 15 connectedness controlling for that of year 9
-             internalizingSum*avoidant, # predicted by the int. btwn internalizing and avoidant
-           data = df)
+             internalizingSum*avoidant, # the int. btwn internalizing and avoidant
+           data = df) # the full data.
+#saveRDS(model, "../../output/interactionModel_TWOGrp.rds")
+```
+```{r, eval=FALSE,echo=FALSE}
+saveRDS(model, "../../output/interactionModel_TWOGrp.rds")
+```
+```{r, eval=TRUE, echo=FALSE}
+model = readRDS("../../output/interactionModel_TWOGrp.rds")
 ```
 
 ## Regression estimates

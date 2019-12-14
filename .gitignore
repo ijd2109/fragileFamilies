@@ -17,3 +17,6 @@ documentation/
 
 # Anything in any archinve folder
 */archive
+
+# plot layers (anything called layers for now)
+*/layers
