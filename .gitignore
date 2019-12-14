@@ -1,0 +1,19 @@
+# the R project:
+*.Rproj
+
+# files in the main repo folder:
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# folders in the main repo folder:
+data/
+documentation/
+
+# .DS_Store files
+*/.DS_Store
+.DS_Store
+
+# Anything in any archinve folder
+*/archive
