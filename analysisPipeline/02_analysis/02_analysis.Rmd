@@ -1,5 +1,5 @@
 ---
-title: "02_analysis"
+title: "Analyzing the effect of the interaction between attachment style and internalizing behavior on school connectedness"
 author: "Ian Douglas"
 date: "12/12/2019"
 output:
@@ -11,8 +11,12 @@ output:
       collapsed: no
       smooth_scroll: yes
 ---
+- Full Github repositiory for this project's code and figures <a href="http://github.com/ijd2109/fragileFamilies">here</a>.
+- <a href="http://fragilefamilies.princeton.edu">Data</a> sourced from and maintained by Princeton and Columbia Universities.
+
+
 ### Analysis Plan
-1. Compute correlations between the outcome, age 15 connectedness at school (CS15), and the predictors: internalizing behaviors (IB) and age 9 (CS9).
+1. Compute correlations between the outcome, *age 15 connectedness at school (CS15)*, and the predictors: *internalizing behaviors (IB)* and *age 9 (CS9)*.
 2. Examine mean differences between the groups, and variance ratios.
 3. Due to the "rule of thumb", conclude that mean differences do not differ, but variance homogeneity is likely violated.
 4. Conduct Welch's test to control Type I error rate while assessing the effect of the grouping variable.
@@ -23,7 +27,7 @@ output:
 9. Interpret the conclusion of the model: the significant interaction shows that after controlling for CS9, the negative effect of IB on CS15 is worsened for subjects exhibiting avoidant attachment with caregivers at age three.
 
 ### Load libraries
-```{r}
+```{r, results='hide', message=FALSE}
 require(effsize)
 require(tidyverse)
 require(car)
@@ -36,7 +40,8 @@ df = as.data.frame(readRDS("../../data/processed/modelData.rds")) # output of wr
 rownames(df) <- df$idnum
 ```
 
-# Compute the correlations between IB and CS9 with CS15.
+# Compute correlations.
+## First between IB and CS9 with CS15.
 ```{r}
 # the continuous predictor
 cor.test(df$target, df$internalizingSum, use = "complete.obs")
@@ -45,10 +50,11 @@ cor.test(df$target, df$yr9_CNCT_Sum, use = "complete.obs")
 # testing multicolinearity
 cor.test(df$internalizingSum, df$yr9_CNCT_Sum, use = "complete.obs")
 ```
- Both are significantly correlated (though weakly) with the outcome. Weak multicolinearity present as well.
+ Both predictors are significantly correlated (though weakly) with the outcome. Weak multicolinearity present between them as well.
 
 # Standardized mean differences and variance ratios.
-## Pairwise comparison between the three group individually on the outcome (CS15)
+## Pairwise mean comparisons. 
+### First between the three groups individually on the outcome (CS15)
 ```{r}
 secure_avoidant = df %>% filter(resistant == 0)
 resistant_secure = df %>% filter(avoidant == 0)
@@ -62,7 +68,7 @@ effsize::cohen.d(d = contrast_list[[3]]$target, as.factor(contrast_list[[3]]$avo
                  na.rm = TRUE)
 ```
 
-## Pairwise comparison between the three group individually on covariate IB
+### Now on covariate IB
 ```{r}
 # secure v avoidant
 effsize::cohen.d(d = contrast_list[[1]]$internalizingSum,
@@ -77,24 +83,31 @@ effsize::cohen.d(d = contrast_list[[3]]$internalizingSum,
                  as.factor(contrast_list[[3]]$avoidant),
                  na.rm = TRUE)
 ```
+
 None of the means differ on average between groups.
 
-## Variance ratios for CS15, CS9, and IB
+## Variance ratios for between the avoidant and non-avoidant groups
+### First for the outcome CS15
 ```{r}
 # Avoidant groups relative to not, for age 15 connectedness
 var(na.omit((filter(df, avoidant == 1))$target))/var(na.omit((filter(df, avoidant == 0))$target))
-# Age 9 connectedness
+```
+### Age 9 connectedness
+```{r}
 var(na.omit((filter(df, avoidant == 1))$yr9_CNCT_Sum))/var(na.omit((filter(df, avoidant == 0))$yr9_CNCT_Sum))
-# IB
+```
+### Covariate IB
+```{r}
 var(na.omit((filter(df, avoidant == 1))$internalizingSum))/var(na.omit((filter(df, avoidant == 0))$internalizingSum))
 ```
 
 Results indicate a degree of imbalance that is concerning, according to Rubin's (2001) guidelines, for CS measured at age 9 and 15 (but not the covariate IB). The scenario suggests that the group with a much smaller sample size, those of avoidant attachment styles, has the much higher variance in the domain of school connectedness at ages 9 and 15 than the other two groups. Thus, conducting traditional ANOVA is more likely to increase the risk of comitting Type I error. Instead, to test the significance of the grouping factor on CS15, I will use Welch's test.
 
-## Visualization
+## Visualization of the distribution of the outcome measure within each group
+### Retaining all three groups:
 ```{r,eval=FALSE}
 # A density plot wil visualize the means and variances for each group as well:
-#pdf(file="../../plots/groupDensities.pdf", width = 12, height = 8)
+#pdf(file="../../plots/groupDensities.pdf", width = 12, height = 8, bg = "white")
 densityPlot(df$target, g = df$ch3att_codeabc, 
             legend = list(location = "topleft", title = 'Attachment Style'),
             xlab = "Connectedness at School", adjust = c(.7, 2, 2))
@@ -103,23 +116,29 @@ abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="secure"))$target),lty=2,c
 abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="resistant"))$target),lty=3,col=6,lwd =2)
 #dev.off()
 ```
-```{r, out.width="0.3\\linewidth", include=TRUE, fig.align="center", fig.cap=c("your caption"), echo=FALSE}
-knitr::include_graphics("../../plots/groupDensities.pdf")
+
+<img src="../../plots/groupDensities.pdf" alt="dplt"  width="720" height="480">
+
+```{r, out.width="0.3\\linewidth", include=TRUE, fig.align="center", fig.cap=c("your caption"), echo=FALSE, eval = TRUE}
+#knitr::include_graphics("../../plots/groupDensities.pdf")
 ```
 
-## And with two groups
+### And between two groups
 ```{r, eval=FALSE}
 density_Data = df %>% mutate_at(vars(avoidant), ~as.factor(ifelse(.==1,"avoidant","other")))
-#pdf(file="../../plots/binTWO_groupDensities.pdf", width = 12, height = 8)
-densityPlot(density_Data$target, g = density_Data$avoidant,
+#pdf(file="../../plots/binTWO_groupDensities.pdf", width = 12, height = 8, bg = "white")
+densityPlot(density_Data$target, g = density_Data$avoidant, 
             legend = list(location = "topleft", title = 'Avoidant'),
             xlab = "Connectedness at School", adjust = c(.7, 2.3))
 abline(v = mean(na.rm=TRUE,(density_Data%>%filter(avoidant=="avoidant"))$target), lwd =2)
 abline(v=mean(na.rm=TRUE,(density_Data%>%filter(avoidant=="other"))$target),lty=2,col=4,lwd =2)
 #dev.off()
 ```
-```{r, out.width="0.3\\linewidth", include=TRUE, fig.align="center", fig.cap=c("your caption"), echo=FALSE}
-knitr::include_graphics("../../plots/binTWO_groupDensities.pdf")
+
+<img src="../../plots/binTWO_groupDensities.pdf" alt="dplt2"  width="720" height="480">
+
+```{r, out.width="0.3\\linewidth", include=TRUE, fig.align="center", fig.cap=c("your caption"), echo=FALSE, eval = TRUE}
+#knitr::include_graphics("../../plots/binTWO_groupDensities.pdf")
 ```
 
 # Welch's one-way ANOVA corection for heteroskedasticity.
