@@ -1,0 +1,253 @@
+---
+title: "01_data_import"
+author: "Ian Douglas"
+date: "11/2/2019"
+output: html_document
+---
+## Load required packages
+```{r}
+require(tidyverse)
+require(haven)
+```
+
+## read raw SPSS data
+```{r}
+## ARCHIVED CHUNK (SKIP)
+# age 3:
+#D_wave3 = read_sav("../../data/raw/wave3/FF_wave3_2019.sav")
+# age 9:
+#D_wave5 = read_sav("../../data/raw/wave5/FF_wave5_2019.sav")
+# age 15:
+#D_wave6 = read_sav("../../data/raw/wave6/FF_wave6_2019.sav")
+
+# save each as an .rds (faster for reading in next time)
+
+# saveRDS(D_wave3,"../../data/raw/wave3/year3_Data.rds")
+# saveRDS(D_wave5,"../../data/raw/wave5/year9_Data.rds")
+# saveRDS(D_wave6,"../../data/raw/wave6/year15_Data.rds")
+```
+
+```{r}
+D_wave3 = readRDS("../../data/raw/wave3/year3_Data.rds")
+D_wave5 = readRDS("../../data/raw/wave5/year9_Data.rds")
+D_wave6 = readRDS("../../data/raw/wave6/year15_Data.rds")
+```
+
+# Extract Age 3 'attachment style' categorical variable
+```{r}
+# store a dataframe containing the id number (for merging) and the variable of choice
+attCat_df = D_wave3 %>%
+  select(idnum, ch3att_codeabc)
+
+# descriptives:
+table(attCat_df$ch3att_codeabc)
+#   -9    1    2    3 
+# 2630   47 1719  502 
+
+#dummy code the variable according to the variable documentation
+attCat_df.1 = attCat_df %>%
+  # first the three dummy codes:
+  mutate(avoidant = ifelse(ch3att_codeabc == 1, 1, 0),
+         secure = ifelse(ch3att_codeabc == 2, 1, 0),
+         resistant = ifelse(ch3att_codeabc == 3, 1, 0)) %>%
+  # now replace the numeric codes with a single column of labels (for grouping purposes)
+  rowwise() %>%
+  mutate(ch3att_codeabc = ifelse(all(c(avoidant, secure, resistant)==0), NA,
+           c("avoidant", "secure", "resistant")[which(c(avoidant, secure, resistant)==1)])
+  ) %>% ungroup() %>% # ungroup by each row
+  # now convert `ch3att_codeabc` to a factor
+  mutate_at(vars(ch3att_codeabc), ~factor(., levels = c("avoidant", "secure", "resistant")))
+rm(list= c("D_wave3","attCat_df"))
+```
+
+# Extract the social anxiety and isolation variables from the other two waves
+```{r}
+# filter for the desired variables
+### Note, column position 1 is the 'idnum' variable.
+wave5 = D_wave5[c(1, #year 9 idnum
+                  # equivalent to grep("^k5e1(a|b|c|d)$"):
+                  grep("^k5e1([a-d])$", names(D_wave5)), #connectedness at school.
+                  # SSRS:
+                  grep("^t5b1([a-y])$", names(D_wave5)), # more SSRS:
+                  grep("^t5b3([a-l])$", names(D_wave5)))]
+# filter similarly at wave 6
+wave6 = D_wave6[c(1, # year 15 idnum
+                  grep("^k6b1([a-d])$", names(D_wave6)), # connectedness at school.
+                  # SSRS:
+                  grep("k6d1([a-l])", names(D_wave6)))]
+```
+
+## read in the meta data
+```{r}
+# # metadata
+# metaData = read.csv("../../documentation/FFMetadata_v03.csv",
+#                     stringsAsFactors = FALSE)
+# # filter only variables at each wave:
+# ## Wave 3
+# saveRDS(filter(metaData, new_name %in% c("idnum","ch3att_codeabc")),
+#         "../../documentation/wave3_year3_metaData.rds")
+# ## Wave 5 (year 9)
+# saveRDS(filter(metaData, new_name %in% names(wave5)),
+#         "../../documentation/wave5_year9_metaData.rds")
+# ## Wave 6 (year 15)
+# saveRDS(filter(metaData, new_name %in% names(wave6)),
+#         "../../documentation/wave6_year15_metaData.rds")
+#rm("metaData")
+# read these saved RDS files back in:
+md_year3 = readRDS("../../documentation/wave3_year3_metaData.rds")
+md_year9 = readRDS("../../documentation/wave5_year9_metaData.rds")
+md_year15 = readRDS("../../documentation/wave6_year15_metaData.rds")
+# select only columns with desired info.
+md_year3_tbl = md_year3[c("new_name","wave","varlab","scale","respondent", "probe","qtext")]
+md_year9_tbl = md_year9[c("new_name","wave","varlab","scale","respondent", "probe","qtext")]
+md_year15_tbl =md_year15[c("new_name","wave","varlab","scale","respondent", "probe","qtext")]
+#rm(list=c("md_year3","md_year9","md_year15"))
+```
+
+# dealing with NA
+```{r}
+## First, if a participant does not have attachment style data, they are dropped
+keepID = attCat_df.1$idnum[!is.na(attCat_df.1$ch3att_codeabc)]
+yr3_df = attCat_df.1[attCat_df.1$idnum %in% keepID, ]
+yr9_df = wave5[wave5$idnum %in% keepID, ]
+yr15_df = wave6[wave6$idnum %in% keepID, ]
+
+# Next, at year 9
+## Rename connectedness at school vars:
+# :: coded 0-Not once ... 4-every day ::
+names(yr9_df[2:5]) <- c("yr9_CNCT_PartOf", "yr9_CNCT_Close", "yr9_CNCT_Happy", "yr9_CNCT_Safe")
+lapply(yr9_df[2:5], table) # just the connectdedness at school variables.
+```
+
+## Convert all less than 0 to NA, then create a sum score
+### Only return NA if all are NA
+```{r}
+# Coding: 1 = not once ... 4 = everyday [less to more]
+# Wording: Positive
+
+# No reversal means higher score = MORE CONNECTED
+Sum = function(x) {
+  len = length(x)
+  x2 = replace(x, x < 0, NA)
+  out = ifelse(sum(is.na(x2)) == len, NA, mean(x2, na.rm = TRUE)*len)
+  return(out)
+}
+
+yr9_df$yr9_CNCT_Sum <- as.numeric(apply(yr9_df[2:5], 1, Sum))
+table(yr9_df$yr9_CNCT_Sum, useNA = "ifany")
+```
+
+## repeat for year 15
+```{r}
+## Rename connectedness at school vars (NOTE THE ORDER CHANGES for the first 2 items):
+# :: coded 1-Strong Agree ... 4- Strong Disagree :: !!! 7 is 'homeschooled' !!!
+names(yr15_df[2:5]) <-c("yr15_CNCT_CloseTo","yr15_CNCT_PartOf","yr15_CNCT_Happy","yr15_CNCT_Safe")
+lapply(yr15_df[2:5], table) # just the connectdedness at school variables.
+#table(yr15_df$yr15_CNCT_Sum, useNA = "ifany")
+```
+
+# remove if any kids were homeschooled at wave 15 (indicated by '-7').
+### This is because they necessarily cannot report the Outcome variables (connectedness at sch.)
+```{r}
+# first some filtering based on the responses above
+keepID = yr15_df$idnum[!as.logical(apply(yr15_df[2:5],1, function(x) {
+  any(x==7)
+}))]
+
+# REPLACE the old data frames
+yr3_df = yr3_df[yr3_df$idnum %in% keepID, ]
+yr9_df = yr9_df[yr9_df$idnum %in% keepID, ]
+yr15_df = yr15_df[yr15_df$idnum %in% keepID, ]
+```
+
+# coding connectedness at age 15
+### REVERSE IT SO HIGHER SCORE IS MORE CONNECTED
+```{r}
+# As indicated above:
+## coding: 1 = strong agree ... 4 = strong disagree
+## wording: positive wording
+## Conclusion: REVERSE CODE so higher number indicates more connection.
+Sum_yr15 = function(x) {
+  len = length(x)
+  x2 = 5 - replace(x, x < 0, NA)
+  out = ifelse(sum(is.na(x2)) == len, NA, mean(x2, na.rm = TRUE)*len)
+  return(out)
+}
+
+# Now continue with the coding of CNCT
+yr15_df$target = as.numeric(apply(yr15_df[2:5], 1, Sum_yr15))
+table(yr15_df$target,useNA = "ifany")
+```
+
+# Compute the sum scores for the SSRS using the same algorithm
+### The items need to be divided into subscales at year 9
+### At year 15 a total sum score is the only metric obtainable
+```{r}
+# coding (for all three): 1=Never ... 4=Very often
+# wording: social=POSITIVE; ext=NEGATIVE; int=NEGATIVE
+# Conclusion: reverse the first one, not the other two.
+# Note, Sum_yr15() is already set up to reverse a scale of max 4.
+socialSkills = paste0("t5b1", letters[grep("[a-v]", letters)])
+externalizing = paste0("t5b3", c("a","c","g","h","i","j"))
+internalizing = paste0("t5b3", c("b","d","e","f","k","l"))
+## start by replacing all negative numbers with NA:
+yr9_df[c(socialSkills, externalizing, internalizing)] =
+  lapply(yr9_df[c(socialSkills, externalizing, internalizing)], function(x) {
+    replace(x, x < 0, NA)
+  })
+```
+
+## Now compute the sum in the same way for the other form
+#### Only reverse code "social skills" so a higher number is more dysfunction
+```{r}
+ssIndex = match(socialSkills, names(yr9_df))
+extIndex = match(externalizing, names(yr9_df))
+intIndex = match(internalizing, names(yr9_df))
+# for social skills, it is on a 4 point scale, so it can re-use Sum_yr15()
+# also, they are POSITIVELY worded, (but higher number is more agreement)
+# so the Sum_yr15 is perfect as it will also reverse code.
+yr9_df$rev_SocSkillSum <- 
+  as.numeric(apply(yr9_df[ssIndex], 1, Sum_yr15))
+# For the other two scales, no reversal is needed, so use Sum()
+yr9_df$externalizingSum <- 
+  as.numeric(apply(yr9_df[extIndex], 1, Sum))
+yr9_df$internalizingSum <- 
+  as.numeric(apply(yr9_df[intIndex], 1, Sum))
+
+# Finally, code a master sum across the three categories
+yr9_df$socialSumTOTAL <- as.numeric(
+  apply(yr9_df[(ncol(yr9_df)-2):ncol(yr9_df)], 1, Sum
+))
+```
+
+## Compute the sum at year 15 for sociality
+### To keep this consistent with year 9 (which includes internal- and externalizing symptoms), sociality score will be higher if a subject is more antisocial.
+```{r}
+# coding: 1=not true ... 3=Often true
+## All the items are positively worded at year 15, so they will be reversed
+## since the coding is also (disagree ... agree)
+## They are also on a 3 point scale, so a new function is needed:
+sum_rev3 = function(x) {
+  len = length(x)
+  x2 = 4 - replace(x, x < 0, NA)
+  out = ifelse(sum(is.na(x2)) == len, NA, mean(x2, na.rm = TRUE)*len)
+  return(out)
+}
+NCOL = ncol(yr15_df) # recall the last column is now 'target'
+yr15_df$rev_socSkill <- as.numeric(apply(yr15_df[-c(1:5,NCOL)], 1, sum_rev3))
+```
+
+# Merge data
+```{r}
+newData = left_join(yr3_df, 
+                    select(yr9_df, idnum, yr9_CNCT_Sum:socialSumTOTAL),
+                    by = "idnum") %>%
+  left_join(., select(yr15_df, idnum, rev_socSkill, target),by = "idnum")
+```
+
+Summary: The outcome (and its level at age 9) are positively coded, while the predictors are the opposite. Connectedness at school is reflected in a higher connectedness score at both timepoints. For sociality (social skills), a higher score is more 'antisociality' (roughly defined), and for internalizing/externalizing a higher score is more problem internal- and externalization.
+```{r}
+saveRDS(newData, "../../data/processed/modelData.rds")
+```
+
+
