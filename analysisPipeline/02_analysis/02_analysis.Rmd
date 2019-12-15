@@ -31,6 +31,7 @@ output:
 require(effsize)
 require(tidyverse)
 require(car)
+require(pscl)
 ```
 
 ### Read in data
@@ -38,6 +39,9 @@ require(car)
 # convert from Tibble to data.frame
 df = as.data.frame(readRDS("../../data/processed/modelData.rds")) # output of wrangling script
 rownames(df) <- df$idnum
+# finally, delete the rows for whom there are NA in the outcome column (only)
+df = df %>%
+  filter(!is.na(target))
 ```
 
 # Compute correlations.
@@ -107,14 +111,14 @@ Results indicate a degree of imbalance that is concerning, according to Rubin's 
 ### Retaining all three groups:
 ```{r,eval=FALSE}
 # A density plot wil visualize the means and variances for each group as well:
-#pdf(file="../../plots/groupDensities.pdf", width = 12, height = 8, bg = "white")
+pdf(file="../../plots/groupDensities.pdf", width = 12, height = 8, bg = "white")
 densityPlot(df$target, g = df$ch3att_codeabc, 
             legend = list(location = "topleft", title = 'Attachment Style'),
             xlab = "Connectedness at School", adjust = c(.7, 2, 2))
 abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="avoidant"))$target), lwd =2)
 abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="secure"))$target),lty=2,col=4,lwd =2)
 abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="resistant"))$target),lty=3,col=6,lwd =2)
-#dev.off()
+dev.off()
 ```
 
 <img src="../../plots/groupDensities.pdf" alt="dplt"  width="720" height="480">
@@ -126,13 +130,13 @@ abline(v=mean(na.rm=TRUE,(df%>%filter(ch3att_codeabc=="resistant"))$target),lty=
 ### And between two groups
 ```{r, eval=FALSE}
 density_Data = df %>% mutate_at(vars(avoidant), ~as.factor(ifelse(.==1,"avoidant","other")))
-#pdf(file="../../plots/binTWO_groupDensities.pdf", width = 12, height = 8, bg = "white")
+pdf(file="../../plots/binTWO_groupDensities.pdf", width = 12, height = 8, bg = "white")
 densityPlot(density_Data$target, g = density_Data$avoidant, 
             legend = list(location = "topleft", title = 'Avoidant'),
             xlab = "Connectedness at School", adjust = c(.7, 2.3))
 abline(v = mean(na.rm=TRUE,(density_Data%>%filter(avoidant=="avoidant"))$target), lwd =2)
 abline(v=mean(na.rm=TRUE,(density_Data%>%filter(avoidant=="other"))$target),lty=2,col=4,lwd =2)
-#dev.off()
+dev.off()
 ```
 
 <img src="../../plots/binTWO_groupDensities.pdf" alt="dplt2"  width="720" height="480">
@@ -263,5 +267,148 @@ summary(model)
 ```{r}
 summary(aov(model))
 ```
+
+# Diganostics
+## Analyze the constant variance assumption
+```{r}
+plot(model$fitted.values, model$residuals, type = "h", 
+     main = "Fitted Values - Residuals Plot")
+abline(h = 0, lty = 3, col="grey")
+```
+
+ Conclusions: There is a very small fraction of outliers relative to the sample size. As a result these participants will be dropped before fitting the model again. Second, the variance appears to decline with higher values of $\hat{Y_i}$. The variance is also extremely negatively skewed.
+ 
+## Mathematically analyze heteroscedasticity
+```{r}
+df = df %>%
+  mutate(targetQuantile =
+           factor(cut(target, quantile(target, probs=c(0, .33, .66, 1)),
+                      include.lowest = TRUE),
+                  labels = c("low","med","high")))
+df %>% group_by(targetQuantile) %>%
+  summarize_at(vars(target), 
+               list("mean"=mean,"var"=var,"n"=length,
+                    "equalMin"= ~sum(. == min(df$target)),
+                    "equalMax" = ~sum(. == max(df$target))))
+```
+
+This reveals the (potentially: only) issue. The entire highest third of the data have responded to the survey by choosing the highest score possible. Therefore, the modelling approach will change to account for the probability of choosing the highest score on the survey.
+
+# Fit the zero-inflated model
+
+  To control for the ceiling effect by which participants were much more likely to select the maximum response on the survey, I will reverse code the sums so that they reflect a new construct that will be positively skewed (rather than negatively skewed), and then offset by a constant so that the minimum is zero. It will thus represent **dis**-connection at school, rather than connectedness, and follow a zero-inflated Poisson distribution. As such, my modeling approach will include a zero-inflated negative binomial model.
+
+## Transforming the target variable:
+```{r}
+df2 = df %>%
+  # subtracting the maximum will reverse code it and shift the minimum to zero.
+  mutate(disconnection = 16 - round(target)) # round to ensure no non-positive vals
+rownames(df2) <- df2$idnum
+```
+
+## Check that the correlations have been reversed:
+```{r}
+cor(df2$disconnection, df2$target, use = 'complete.obs') # should be -1
+# the continuous predictor
+cor.test(df2$disconnection, df2$internalizingSum, use = "complete.obs")
+# the year9 observation of outcome (to control for)
+cor.test(df2$disconnection, df2$yr9_CNCT_Sum, use = "complete.obs")
+```
+
+#### Good, these correlations are exactly identical as with the previous coding.
+
+## Visualize the new distribution:
+```{r}
+#plot.window(xlim = c(0,4), ylim = c(0,.4), xaxs="i")
+plot(density(df2$disconnection, from = min(df2$disconnection),
+             to = max(df2$disconnection), bw = .7, kernel = 'g'),
+     main="Aggregate Distribution of Disconnectedness", xaxs = "i")
+abline(v = mean(df2$disconnection), lty = 2)
+text(x = mean(df2$disconnection), y = .075, 
+     labels = expression(bar("Y")), pos = 4)
+```
+
+## Fit the zero inflated model
+```{r}
+zeroInflMod = zeroinfl(
+  disconnection ~ yr9_CNCT_Sum + internalizingSum*avoidant | 
+    socialSumTOTAL,
+  data = df2, na.action = na.omit, dist = 'negbin'
+)
+summary(zeroInflMod)
+```
+
+## Subset the data to remove NA
+```{r}
+df3 = na.omit(df2 %>%
+                select(idnum, target, disconnection, 
+                       avoidant, yr9_CNCT_Sum, internalizingSum)
+) %>%
+  mutate(non_zero = ifelse(disconnection == 0, 0, 1))
+rownames(df3) <- df3$idnum
+hurdle_fn = function(data) {
+  zeroMod = glm(non_zero ~ yr9_CNCT_Sum + internalizingSum - 1,
+                    data = data, family = 'quasibinomial')
+  data$nz_Prob = predict(test.zeroMod, type ="resp") # output the probability
+  hurdleMod = glm(disconnection ~ nz_Prob+yr9_CNCT_Sum + internalizingSum * avoidant, 
+                  data = subset(data, non_zero == 1), 
+                  family = Gamma(link = log))
+  part2_mod = glm(disconnection ~ nz_Prob + yr9_CNCT_Sum + internalizingSum * avoidant, 
+                  data = subset(data, non_zero == 1), 
+                  family = 'gaussian')
+  return(list("hurdle"=hurdleMod, "zeroMod" = zeroMod, "twopm"=part2_mod))
+}
+
+newModels = hurdle_fn(df3)
+```
+
+```{r}
+model2 = newModels$hurdle
+predict(model2, type = "terms")
+```
+
+
+## Fit the hurdle model for the continuous 'clumped' outcome.
+```{r}
+model2 = hurdle(disconnection ~ yr9_CNCT_Sum + internalizingSum * avoidant |
+                    yr9_CNCT_Sum + internalizingSum + ch3att_codeabc,
+                na.action = na.omit, data = df2)
+```
+
+
+## Identify influential outliers
+```{r}
+infl = rownames(influencePlot(model))
+infl
+```
+
+## Analyze the normality assumption of the residuals
+```{r}
+qqPlot(resid(model))
+```
+
+As expected from the fitted value X residual plot, the qq plot also shows that the residuals are not normally distributed. But this would be expected anyway if the errors are not heterscedastic anyway.
+
+## Respecify without outliers and repeat
+```{r}
+df2 = df[!df$idnum %in% infl, ]
+model2 = lm(target ~ yr9_CNCT_Sum + internalizingSum * avoidant, 
+            data = df2)
+```
+
+## Plot the fitted values against the residuals
+```{r}
+plot(model2$fitted.values, model2$residuals, type = "h",
+     main = "Fitted Values and Residuals")
+abline(h = 0, lty = 3, col="grey")
+```
+
+ This seems to have slightly flattened the decreasing trend, but not entirely. 
+## Render the scale-location plot
+```{r}
+plot(model2, 3)
+```
+
+#Boxcox transformation would be next if de-censoring the data doesn't help.
 
 
