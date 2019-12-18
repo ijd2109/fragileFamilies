@@ -14,17 +14,21 @@ output:
 - Full Github repositiory for this project's code and figures <a href="http://github.com/ijd2109/fragileFamilies">here</a>.
 - <a href="http://fragilefamilies.princeton.edu">Data</a> sourced from and maintained by Princeton and Columbia Universities.
 
-
 ### Analysis Plan
+Part 1: fitting the hypothesized model.
 1. Compute correlations between the outcome, *age 15 connectedness at school (CS15)*, and the predictors: *internalizing behaviors (IB)* and *age 9 (CS9)*.
 2. Examine mean differences between the groups, and variance ratios.
-3. Due to the "rule of thumb", conclude that mean differences do not differ, but variance homogeneity is likely violated.
-4. Conduct Welch's test to control Type I error rate while assessing the effect of the grouping variable.
+3. Compute bootstrap confidence intervals for variance ratios.
+4. Conduct Welch's test to control Type I error rate while assessing the effect of the grouping variable because the variance ratios are in fact large.
 5. The mean differences were found to be non-significant, but the hypothesis purports a crossing-type interaction, so plot the groups on the dimensions of IB (binned into high and low categories) and CS15.
-6. The graphical evidence is clear that an interaction exists, and that a meaningful grouping of subjects should be 'avoidant' and 'not avoidant'. 
+6. The graphical evidence does suggest that an interaction exists, and that a useful grouping of subjects should be 'avoidant' and 'not avoidant'. 
 7. Fit the interaction model: predict CS15 from the Group-by-IB interaction, controlling for the continuous covariate CS9.
 8. Report the F-statistic and p-value to indicate the significance of the model, as well as the significant (and standardized) Beta coefficients as a measure of effect size for the significant covariate and the interaction.
 9. Interpret the conclusion of the model: the significant interaction shows that after controlling for CS9, the negative effect of IB on CS15 is worsened for subjects exhibiting avoidant attachment with caregivers at age three.
+Part 2: diagnostics and further interrogation.
+10. Running model diagnostics, it appears the constant error variance assumption is not met.
+11. Run a Box-Cox transformation inside a two-part hurdle (zero-inflation model).
+12. This provides the model with the best fit and greatest loglikelihood.
 
 ### Load libraries
 ```{r, results='hide', message=FALSE}
@@ -48,17 +52,19 @@ df = df %>%
 ## First between IB and CS9 with CS15.
 ```{r}
 # the continuous predictor
-cor.test(df$target, df$internalizingSum, use = "complete.obs")
+cor.test(df$target, df$internalizingSum, use = "complete.obs",
+         alternative = "two")
 # the year9 observation of outcome (to control for)
-cor.test(df$target, df$yr9_CNCT_Sum, use = "complete.obs")
+cor.test(df$target, df$yr9_CNCT_Sum, use = "complete.obs",
+         alternative = "two")
 # testing multicolinearity
-cor.test(df$internalizingSum, df$yr9_CNCT_Sum, use = "complete.obs")
+cor.test(df$internalizingSum, df$yr9_CNCT_Sum, use = "complete.obs",
+         alternative = "two")
 ```
- Both predictors are significantly correlated (though weakly) with the outcome. Weak multicolinearity present between them as well.
+ Both predictors are significantly correlated (though weakly) with the outcome. Weak correlation is observed between the predictors, but well below the range necessary to infer multicolinearity.
 
-# Standardized mean differences and variance ratios.
-## Pairwise mean comparisons. 
-### First between the three groups individually on the outcome (CS15)
+# Compare standardized mean differences, and conduct ANOVA. 
+## First between the three groups individually on the outcome (CS15)
 ```{r}
 secure_avoidant = df %>% filter(resistant == 0)
 resistant_secure = df %>% filter(avoidant == 0)
@@ -72,7 +78,7 @@ effsize::cohen.d(d = contrast_list[[3]]$target, as.factor(contrast_list[[3]]$avo
                  na.rm = TRUE)
 ```
 
-### Now on covariate IB
+## Now on covariate IB
 ```{r}
 # secure v avoidant
 effsize::cohen.d(d = contrast_list[[1]]$internalizingSum,
@@ -90,24 +96,85 @@ effsize::cohen.d(d = contrast_list[[3]]$internalizingSum,
 
 None of the means differ on average between groups.
 
+## Now fit the ANOVA, which assumes equal variances, to analyze mean heterogeneity that way.
+```{r}
+anova1 = lm(target ~ ch3att_codeabc, data = df)
+anova(lm(target ~ 1, data = df), anova1)
+```
+
+## Following the omnibus test, the linear contrast between avoidant all other groups:
+```{r}
+# use the MSE from the residual variance of the ANOVA table above.
+MSE = 5.292
+# Derive the vector of coefficients (adding up to zero).
+cj = c("avoidant" = -1, "secure" = .5, "resistant" = .5)
+# compile the within group sample sizes:
+nj = sapply(unique(df$ch3att_codeabc), function(x) {
+  Nj = sum(df$ch3att_codeabc==x); names(Nj) = x
+  return(Nj)
+})
+# compute the vector of group means
+mu = sapply(unique(df$ch3att_codeabc), function(x) {
+  mean(as.vector(df[df$ch3att_codeabc==x, "target"]))
+}); names(mu) <- unique(df$ch3att_codeabc)
+psi = sum(mu*cj)
+compute.t.contrast = function(MSE, coefs, Nj, psi) {
+  out = psi/(sqrt(MSE*sum(coefs, Nj[match(names(Nj), names(coefs))])))
+  return(out)
+}
+t.contrast = compute.t.contrast(MSE, cj, nj, psi)
+c("value" = t.contrast, "p-value" = pt(t.contrast, df= anova1$df.residual))
+```
+
+The linear contrast is not significant.
+
+# Assess assumptions about equal variances implicit in ANOVA.
 ## Variance ratios for between the avoidant and non-avoidant groups
-### First for the outcome CS15
 ```{r}
-# Avoidant groups relative to not, for age 15 connectedness
-var(na.omit((filter(df, avoidant == 1))$target))/var(na.omit((filter(df, avoidant == 0))$target))
+vrData = na.omit( # this will ultimately be the same data that is modelled.
+  df %>% dplyr::select(avoidant, target, yr9_CNCT_Sum, internalizingSum)
+)
+sapply(c("target","yr9_CNCT_Sum","internalizingSum"), function(x) {
+  return(var(vrData[vrData$avoidant == 1, x]) / var(vrData[vrData$avoidant == 0, x]))
+})
 ```
-### Age 9 connectedness
+
+## Bootstrap confidence intervals for each.
 ```{r}
-var(na.omit((filter(df, avoidant == 1))$yr9_CNCT_Sum))/var(na.omit((filter(df, avoidant == 0))$yr9_CNCT_Sum))
-```
-### Covariate IB
-```{r}
-var(na.omit((filter(df, avoidant == 1))$internalizingSum))/var(na.omit((filter(df, avoidant == 0))$internalizingSum))
+B = 10000 # set the number of permutations
+bootOut = data.frame( # prepare empty data frame for capturing results
+  "target"= rep(NA, times = B),
+  "yr9_CNCT_Sum"= rep(NA, times = B),
+  "internalizingSum"= rep(NA, times = B)
+)
+# separate the data into groups outside the loop to save computational time
+avoidantDf = vrData[vrData$avoidant == 1, ]
+N_group_A = nrow(avoidantDf) # record the subsample size now as well
+non_avoidantDf = vrData[vrData$avoidant == 0, ]
+N_group_nonA = nrow(non_avoidantDf) # same for the non-avoidant group
+# Run the loop:
+for (i in 1:B) {
+  bootAvoid = avoidantDf[sample(1:N_group_A, replace = TRUE), ]
+  boot_non_Avoid = non_avoidantDf[sample(1:N_group_nonA, replace = TRUE), ]
+  # compute all variance ratios (all three outcomes) in parallel
+  bootOut[i, ] <- sapply(names(bootOut), function(x) { # names of bootOut are var names.
+    # x is the variable name:
+    return(var(bootAvoid[, x]) / var(boot_non_Avoid[, x]))
+  })
+}
+
+## Results:
+data.frame(row.names = names(bootOut),
+  "estimate" = colMeans(bootOut),
+  "CI_lwr" = sapply(bootOut, function(x) quantile(x, probs = 0.025)),
+  "CI_upr" = sapply(bootOut, function(x) quantile(x, probs = 0.975))
+)
 ```
 
 Results indicate a degree of imbalance that is concerning, according to Rubin's (2001) guidelines, for CS measured at age 9 and 15 (but not the covariate IB). The scenario suggests that the group with a much smaller sample size, those of avoidant attachment styles, has the much higher variance in the domain of school connectedness at ages 9 and 15 than the other two groups. Thus, conducting traditional ANOVA is more likely to increase the risk of comitting Type I error. Instead, to test the significance of the grouping factor on CS15, I will use Welch's test.
 
-## Visualization of the distribution of the outcome measure within each group
+# Visualization
+## Plotting the distribution of the outcome measure within each group presents both the mean variability and variance heterogeneity in one plane.
 ### Retaining all three groups:
 ```{r,eval=FALSE}
 # A density plot wil visualize the means and variances for each group as well:
@@ -156,12 +223,12 @@ oneway.test(target ~ as.factor(avoidant), data = resist_avoid)
 oneway.test(target ~ as.factor(avoidant), data = secure_avoidant)
 ```
 
-## Comparing the avoidant to the non-avoidant group
+## Comparing the avoidant to the non-avoidant groups pooled
 ```{r}
 oneway.test(target ~ as.factor(avoidant), data = df)
 ```
 
-## All groups (omnibus):
+## All groups (omnibus) assuming unequal variances:
 ```{r}
 oneway.test(target ~ ch3att_codeabc, data = df)
 ```
@@ -267,148 +334,3 @@ summary(model)
 ```{r}
 summary(aov(model))
 ```
-
-# Diganostics
-## Analyze the constant variance assumption
-```{r}
-plot(model$fitted.values, model$residuals, type = "h", 
-     main = "Fitted Values - Residuals Plot")
-abline(h = 0, lty = 3, col="grey")
-```
-
- Conclusions: There is a very small fraction of outliers relative to the sample size. As a result these participants will be dropped before fitting the model again. Second, the variance appears to decline with higher values of $\hat{Y_i}$. The variance is also extremely negatively skewed.
- 
-## Mathematically analyze heteroscedasticity
-```{r}
-df = df %>%
-  mutate(targetQuantile =
-           factor(cut(target, quantile(target, probs=c(0, .33, .66, 1)),
-                      include.lowest = TRUE),
-                  labels = c("low","med","high")))
-df %>% group_by(targetQuantile) %>%
-  summarize_at(vars(target), 
-               list("mean"=mean,"var"=var,"n"=length,
-                    "equalMin"= ~sum(. == min(df$target)),
-                    "equalMax" = ~sum(. == max(df$target))))
-```
-
-This reveals the (potentially: only) issue. The entire highest third of the data have responded to the survey by choosing the highest score possible. Therefore, the modelling approach will change to account for the probability of choosing the highest score on the survey.
-
-# Fit the zero-inflated model
-
-  To control for the ceiling effect by which participants were much more likely to select the maximum response on the survey, I will reverse code the sums so that they reflect a new construct that will be positively skewed (rather than negatively skewed), and then offset by a constant so that the minimum is zero. It will thus represent **dis**-connection at school, rather than connectedness, and follow a zero-inflated Poisson distribution. As such, my modeling approach will include a zero-inflated negative binomial model.
-
-## Transforming the target variable:
-```{r}
-df2 = df %>%
-  # subtracting the maximum will reverse code it and shift the minimum to zero.
-  mutate(disconnection = 16 - round(target)) # round to ensure no non-positive vals
-rownames(df2) <- df2$idnum
-```
-
-## Check that the correlations have been reversed:
-```{r}
-cor(df2$disconnection, df2$target, use = 'complete.obs') # should be -1
-# the continuous predictor
-cor.test(df2$disconnection, df2$internalizingSum, use = "complete.obs")
-# the year9 observation of outcome (to control for)
-cor.test(df2$disconnection, df2$yr9_CNCT_Sum, use = "complete.obs")
-```
-
-#### Good, these correlations are exactly identical as with the previous coding.
-
-## Visualize the new distribution:
-```{r}
-#plot.window(xlim = c(0,4), ylim = c(0,.4), xaxs="i")
-plot(density(df2$disconnection, from = min(df2$disconnection),
-             to = max(df2$disconnection), bw = .7, kernel = 'g'),
-     main="Aggregate Distribution of Disconnectedness", xaxs = "i")
-abline(v = mean(df2$disconnection), lty = 2)
-text(x = mean(df2$disconnection), y = .075, 
-     labels = expression(bar("Y")), pos = 4)
-```
-
-## Fit the zero inflated model
-```{r}
-zeroInflMod = zeroinfl(
-  disconnection ~ yr9_CNCT_Sum + internalizingSum*avoidant | 
-    socialSumTOTAL,
-  data = df2, na.action = na.omit, dist = 'negbin'
-)
-summary(zeroInflMod)
-```
-
-## Subset the data to remove NA
-```{r}
-df3 = na.omit(df2 %>%
-                select(idnum, target, disconnection, 
-                       avoidant, yr9_CNCT_Sum, internalizingSum)
-) %>%
-  mutate(non_zero = ifelse(disconnection == 0, 0, 1))
-rownames(df3) <- df3$idnum
-hurdle_fn = function(data) {
-  zeroMod = glm(non_zero ~ yr9_CNCT_Sum + internalizingSum - 1,
-                    data = data, family = 'quasibinomial')
-  data$nz_Prob = predict(test.zeroMod, type ="resp") # output the probability
-  hurdleMod = glm(disconnection ~ nz_Prob+yr9_CNCT_Sum + internalizingSum * avoidant, 
-                  data = subset(data, non_zero == 1), 
-                  family = Gamma(link = log))
-  part2_mod = glm(disconnection ~ nz_Prob + yr9_CNCT_Sum + internalizingSum * avoidant, 
-                  data = subset(data, non_zero == 1), 
-                  family = 'gaussian')
-  return(list("hurdle"=hurdleMod, "zeroMod" = zeroMod, "twopm"=part2_mod))
-}
-
-newModels = hurdle_fn(df3)
-```
-
-```{r}
-model2 = newModels$hurdle
-predict(model2, type = "terms")
-```
-
-
-## Fit the hurdle model for the continuous 'clumped' outcome.
-```{r}
-model2 = hurdle(disconnection ~ yr9_CNCT_Sum + internalizingSum * avoidant |
-                    yr9_CNCT_Sum + internalizingSum + ch3att_codeabc,
-                na.action = na.omit, data = df2)
-```
-
-
-## Identify influential outliers
-```{r}
-infl = rownames(influencePlot(model))
-infl
-```
-
-## Analyze the normality assumption of the residuals
-```{r}
-qqPlot(resid(model))
-```
-
-As expected from the fitted value X residual plot, the qq plot also shows that the residuals are not normally distributed. But this would be expected anyway if the errors are not heterscedastic anyway.
-
-## Respecify without outliers and repeat
-```{r}
-df2 = df[!df$idnum %in% infl, ]
-model2 = lm(target ~ yr9_CNCT_Sum + internalizingSum * avoidant, 
-            data = df2)
-```
-
-## Plot the fitted values against the residuals
-```{r}
-plot(model2$fitted.values, model2$residuals, type = "h",
-     main = "Fitted Values and Residuals")
-abline(h = 0, lty = 3, col="grey")
-```
-
- This seems to have slightly flattened the decreasing trend, but not entirely. 
-## Render the scale-location plot
-```{r}
-plot(model2, 3)
-```
-
-#Boxcox transformation would be next if de-censoring the data doesn't help.
-
-

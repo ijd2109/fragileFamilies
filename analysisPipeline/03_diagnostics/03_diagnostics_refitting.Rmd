@@ -1,0 +1,244 @@
+---
+title: "03_Diagnostics_Respecification"
+author: "Ian Douglas"
+date: "12/15/2019"
+output: html_document
+---
+```{r}
+require(car)
+require(tidyverse)
+require(pscl)
+require(MASS)
+```
+```{r}
+model = readRDS("../../output/interactionModel_TWOGrp.rds")
+```
+```{r}
+# convert from Tibble to data.frame
+df = as.data.frame(readRDS("../../data/processed/modelData.rds")) # output of wrangling script
+rownames(df) <- df$idnum
+# finally, delete the rows for whom there are NA in the outcome column (only)
+df = df %>%
+  filter(!is.na(target))
+```
+
+
+# Diganostics
+## Analyze the constant variance assumption
+```{r, eval=FALSE}
+pdf(width = 12, height = 7.5, file = "../../plots/fitted.X.residualPlot_OLS.pdf")
+plot(model$fitted.values, model$residuals, type = "h", 
+     main = "Fitted Values - Residuals Plot", col = 2,
+     xlab = "Fitted Values", ylab = "Residuals")
+abline(h = 0, lty = 3, col="grey")
+par(new=TRUE)
+plot(model$fitted.values, model$residuals, cex = .5,
+     xlab = "Fitted Values", ylab = "Residuals")
+dev.off()
+```
+
+<img src="../../plots/fitted.X.residualPlot_OLS.pdf" alt="residPlotOLS" width="720" height="480">
+
+## QQ-plot of the OLS residuals:
+```{r, echo=FALSE}
+model = readRDS("../../output/interactionModel_TWOGrp.rds")
+```
+```{r, echo=FALSE, eval=FALSE}
+pdf(height=8, width=11, file="../../plots/OLS_qqPlot.pdf")
+qqPlot(model$resid, ylab = "OLS model Residuals")
+dev.off()
+```
+```{r}
+qqPlot(model$resid, ylab = "OLS model Residuals")
+```
+
+ Conclusions: There is a very small fraction of outliers relative to the sample size. As a result these participants will be dropped before fitting the model again. Second, the variance appears to decline with higher values of $\hat{Y_i}$. The variance is also extremely negatively skewed.
+ 
+## Mathematically analyze heteroscedasticity
+```{r}
+df = df %>%
+  mutate(targetQuantile =
+           factor(cut(target, quantile(target, probs=c(0, .33, .66, 1)),
+                      include.lowest = TRUE),
+                  labels = c("low","med","high")))
+df %>% group_by(targetQuantile) %>%
+  summarize_at(vars(target), 
+               list("mean"=mean,"var"=var,"n"=length,
+                    "equalMin"= ~sum(. == min(df$target)),
+                    "equalMax" = ~sum(. == max(df$target))))
+```
+
+This reveals the (potentially: only) issue. The entire highest third of the data have responded to the survey by choosing the highest score possible. Therefore, the modelling approach will change to account for the probability of choosing the highest score on the survey.
+
+# Fit the zero-inflated model
+
+  To control for the ceiling effect by which participants were much more likely to select the maximum response on the survey, I will reverse code the sums so that they reflect a new construct that will be positively skewed (rather than negatively skewed), and then offset by a constant so that the minimum is zero. It will thus represent **dis**-connection at school, rather than connectedness, and follow a zero-inflated Poisson distribution. As such, my modeling approach will include a zero-inflated negative binomial model.
+
+## Transforming the target variable:
+```{r}
+df2 = df %>%
+  # subtracting the maximum will reverse code it and shift the minimum to zero.
+  mutate(disconnection = 16 - round(target)) # round to ensure no non-positive vals
+rownames(df2) <- df2$idnum
+```
+
+## Check that the correlations have been reversed:
+```{r}
+cor(df2$disconnection, df2$target, use = 'complete.obs') # should be -1
+# the continuous predictor
+cor.test(df2$disconnection, df2$internalizingSum, use = "complete.obs")
+# the year9 observation of outcome (to control for)
+cor.test(df2$disconnection, df2$yr9_CNCT_Sum, use = "complete.obs")
+```
+
+#### Good, these correlations are exactly identical as with the previous coding.
+
+## Visualize the new distribution:
+```{r}
+#plot.window(xlim = c(0,4), ylim = c(0,.4), xaxs="i")
+pdf(file="../../plots/aggregateDisconnectDensity.pdf",
+    height = 8, width = 12)
+plot(density(df2$disconnection, from = min(df2$disconnection),
+             to = max(df2$disconnection), bw = .7, kernel = 'g'),
+     main="Aggregate Distribution of Disconnectedness", xaxs = "i")
+abline(v = mean(df2$disconnection), lty = 2)
+text(x = mean(df2$disconnection), y = .075, 
+     labels = expression(bar("Y")), pos = 4)
+dev.off()
+```
+
+<img src="../../plots/aggregateDisconnectDensity.pdf"  alt="aggPlt"  width="720" height="480">
+
+## Fit the zero inflated model
+```{r}
+zeroInflMod = zeroinfl(
+  disconnection ~ yr9_CNCT_Sum + internalizingSum*avoidant | 1,
+  data = df2, na.action = na.omit, dist = 'negbin'
+)
+summary(zeroInflMod)
+```
+
+## Evaluate the residuals
+```{r}
+qqPlot(resid(zeroInflMod))
+```
+
+## Two part model
+```{r}
+hurdle_fn = function(data) {
+  dat = na.omit(dplyr::select(data, disconnection, 
+                              yr9_CNCT_Sum, internalizingSum, avoidant))
+  # Part 1: model the zeroes
+  dat$is_min <- ifelse(dat$disconnection == min(dat$disconnection), 1, 0)
+  part1 = glm(is_min ~ yr9_CNCT_Sum + internalizingSum*avoidant,
+              data = dat, family = 'binomial')
+  part2 = glm(disconnection ~ yr9_CNCT_Sum + internalizingSum * avoidant,
+              data = subset(dat, is_min == 0),
+              family = Gamma(link = log))
+  return(list(
+    zeroMod = part1,
+    countMod = part2
+  ))
+}
+
+twopm = hurdle_fn(df2)
+#```
+
+
+## Evaluate the fit
+#```{r}
+for (i in twopm) {
+  qqPlot(resid(i))
+}
+```
+
+## Compare the log likelihood of each model
+```{r}
+
+data.frame("log_Likelihood" = c(as.numeric(logLik(model)), as.numeric(logLik(zeroInflMod)),
+           logLik(twopm[[1]]), as.numeric(logLik(twopm[[2]]))),
+           "mod" =c("Lin.Reg","zero-Infl","Binom+Gamma","Binom+Gamma")) %>%
+  group_by(mod) %>%
+  summarize_at(vars(log_Likelihood), sum)
+```
+
+## Boxcox transformation and model respecification.
+```{r}
+# Do this for the two-part model since the OLS model was much worse than others.
+bc_twopm = boxcox(twopm[[2]], lambda = seq(-3,3))
+best_lambda = bc_twopm$x[which.max(bc_twopm$y)]
+
+bc.hurdle = function(data) {
+  dat = na.omit(dplyr::select(data, disconnection, 
+                              yr9_CNCT_Sum, internalizingSum, avoidant))
+  # Part 1: model the zeroes
+  dat$is_min <- ifelse(dat$disconnection == min(dat$disconnection), 1, 0)
+  part1 = glm(is_min ~ yr9_CNCT_Sum + internalizingSum*avoidant,
+              data = dat, family = 'binomial')
+  part2 = glm(disconnection^best_lambda ~ yr9_CNCT_Sum + internalizingSum * avoidant,
+              data = subset(dat, is_min == 0),
+              family = Gamma(link = log))
+  return(list(
+    zeroMod = part1,
+    countMod = part2
+  ))
+}
+
+bc.twopm = bc.hurdle(df2)
+#```
+
+
+## Evaluate the fit
+#```{r}
+for (i in bc.twopm) {
+  qqPlot(resid(i))
+}
+```
+
+## Results
+```{r}
+allModels = list(model, zeroInflMod, twopm[[1]], twopm[[2]], bc.twopm[[1]], bc.twopm[[2]])
+aic <- function(fit){
+  k <- length(unlist(fit$coefficients)) - 1
+  n <- nrow(na.omit(fit$model))
+  lgLik <- logLik(fit)[1]
+  out <- -2 * lgLik + 2 * k
+  return (out)
+}
+bic <- function(fit){
+  k <- length(unlist(fit$coefficients)) - 1
+  n <- nrow(na.omit(fit$model))
+  lgLik <- logLik(fit)[1]
+  out <- -2 * lgLik + log(n) * k
+  return (out)
+}
+
+data.frame("AIC" = sapply(allModels, aic),
+           "BIC" = sapply(allModels, bic),
+           "mod" = c("OLS","zeroInfl","Binom","Gamma",
+                    "bc.Binom","bc.Gamma"))
+```
+
+## Plot of the residuals against the fitted values
+```{r, eval=FALSE}
+#pdf(height = 8, width = 11, file="../../plots/resids.X.fittedsTwoPartMod.pdf")
+plot(bc.twopm[[2]]$fitted.values,bc.twopm$countMod$residuals,type="h",col=2,
+     xlab = "Fitted Values", ylab = "Residuals",
+     main = "Fitted Values - Residuals Plot")
+abline(h=mean(bc.twopm$countMod$residuals), col="grey", lty=3)
+par(new=TRUE)
+plot(bc.twopm[[2]]$fitted.values,bc.twopm$countMod$residuals, 
+     xlab = "Fitted Values", ylab = "Residuals")
+#dev.off()
+```
+
+<img src="../../plots/resids.X.fittedsTwoPartMod.pdf" alt=fittedResidtwopm" width=720 height=480>
+
+## Plot the QQ-plot for the residuals
+```{r}
+pdf(height = 8, width = 11, file="../../plots/qqplotTwoPartModBoxCox.pdf")
+qqPlot(bc.twopm[[2]]$residuals, ylab = "Residuals from Two-Part Model (Box-Cox)")
+dev.off()
+```
+
+<img src="../../plots/qqplotTwoPartModBoxCox.pdf" alt=fittedResidtwopm" width=720 height=480>
